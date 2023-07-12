@@ -1,0 +1,588 @@
+/*
+ * FinalProject.c
+ *
+ * Created: 4/19/2022 16:28:52
+ * Author : rstar
+ */ 
+
+#define F_CPU 20000000UL
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/portpins.h>
+#include <util/delay.h>
+#include <avr/pgmspace.h>
+#include <stdint.h>
+
+const uint8_t leftMotorSpeed[] = {37, 45, 52, 60, 67, 75, 80, 90, 97};
+const uint8_t rightMotorSpeed[] = {97, 90, 80, 75, 67, 60, 52, 45, 37};
+const uint16_t threshold PROGMEM = 0x0505;										//5
+const uint16_t timeout PROGMEM = 0x0A0A; // timeout should be 2 times threshold   c
+volatile uint8_t pinState = 0;
+volatile uint8_t prevState = 0;
+volatile uint8_t hasReadPins = 0;
+uint32_t pinstate[5] = {1,1,1,1,1};
+uint8_t hasBeenRead[5] = {0,0,0,0,0} ;
+//uint8_t pinChangeTimes[5] = {0,0,0,0,0} ;
+
+const uint8_t FIRST_DELAY =9;
+const uint8_t DELAY_TURN = 11;
+const uint16_t SECOND_DELAY = 9;
+void subroutine(uint8_t i, uint8_t count ){
+	pinstate[i] = ( (count - threshold) > 0) ? (1)  : (0);
+	hasBeenRead[i] = 1;
+}
+
+ISR(PCINT1_vect){
+	uint8_t current = PINC;
+	uint8_t count = TCNT1;
+	uint8_t prev = PrevPinc; 
+	uint8_t xorPINC = prev ^ current; 
+	PrevPinc = PINC; 
+	for (uint8_t counter=0; counter < 5; ++counter){
+		if(hasBeenRead[counter] != 1 && (xorPINC%2) == 1){
+			subroutine(counter, count); 	
+		}
+		xorPINC = xorPINC >>1; 
+		 
+	}
+}
+
+
+
+ISR(TIMER1_COMPA_vect){
+	for(uint8_t i =0; i < 5; ++i){
+		pinstate[i] = (hasBeenRead[i]==0) ? (1) : (0);  
+		hasBeenRead[i] =1; 
+	}
+	hasReadPins = 0;
+	
+}
+//PWM  methods
+// Motor Initialization routine -- this function must be called
+// before you use any of the above functions
+void motors_init()
+{
+	// configure for inverted PWM output on motor control pins:
+	// set OCxx on compare match, clear on timer overflow
+	// Timer0 and Timer2 count up from 0 to 255
+	//TCCR1A = (1<<CS10); //set timer1
+	//TCCR1B = 0;
+	
+	TCCR0A = 0;
+	TCCR0B = 0;
+	TCCR0A = _BV(COM0A1) | _BV(COM0A0)| _BV(COM0B1) | _BV(COM0B0) | _BV(WGM01) | _BV(WGM00);
+	TCCR0B = 0x05; //_BV(CS00) | _BV(WGM02);
+	// use the system clock/8 (=2.5 MHz) as the timer clock
+	
+	TCCR2A = 0;
+	TCCR2B = 0;
+	TCCR2A = _BV(COM2A1) | _BV(COM2A0) | _BV(COM2B1) | _BV(COM2B0) | _BV(WGM01) | _BV(WGM00);
+	TCCR2B = 0x05; //_BV(WGM22) | _BV(CS20);
+	// initialize all PWMs to 0% duty cycle (braking)
+	OCR0A = OCR0B = OCR2A = OCR2B = 0;
+	
+	// set appropriate PWM compare registers
+	//M1_forward(leftMotorSpeed[4]);
+	//M2_forward(rightMotorSpeed[4]); 
+	
+	// set PWM pins as digital outputs (the PWM signals will not
+	// appear on the lines if they are digital inputs)
+	DDRD=0;
+	DDRB = 0;
+	
+	DDRD |= (1 << PD3) | (1 << PD5) | (1 << PD6);
+	DDRB |= (1 << PB3);
+
+// set appropriate PWM compare registers
+	OCR0B = leftMotorSpeed[4];
+	OCR2B = rightMotorSpeed[4];
+	
+	
+}
+// delay for time_ms milliseconds by looping
+// time_ms is a two-byte value that can range from 0 - 65535
+// a value of 65535 (0xFF) produces an infinite delay
+void delay_us(unsigned int time_ms)
+{
+	// _delay_ms() comes from <util/delay.h> and can only
+	// delay for a max of around 13 ms when the system
+	// clock is 20 MHz, so we define our own longer delay
+	// routine based on _delay_ms()
+	unsigned int i;
+	for (i = 0; i < time_ms; i++)
+	_delay_us(1);
+}
+
+void wait10us(){
+	delay_us(10);
+}
+
+void M1_forward(unsigned char pwm)
+{
+
+	OCR0A = 0;
+	OCR0B = pwm;
+}
+void M1_reverse(unsigned char pwm)
+{
+	
+	OCR0B = 0;
+	OCR0A = pwm;
+}
+void M2_forward(unsigned char pwm)
+{
+	
+	OCR2A = 0;
+	OCR2B = pwm;
+}
+void M2_reverse(unsigned char pwm)
+{
+	
+	OCR2B = 0;
+	OCR2A = pwm;
+}
+
+void LeftFor(){
+	M1_forward(100);
+}
+
+void LeftRev(){
+	M1_reverse(100);
+	
+}
+
+void RightFor(){
+	M2_forward(100);
+	
+}
+
+void RightRev(){
+	M2_reverse(100);
+	
+}
+
+void turn_backwards()
+{
+	turn_left();
+}
+
+void LeftBrake(){
+	M1_forward(0);
+}
+
+void RightBrake(){
+	M2_forward(0);
+}
+
+void Brake(){
+	LeftBrake();
+	RightBrake();
+}
+
+void brake() 
+{
+	TCCR0B = 0;
+	TCCR2B = 0;
+	TCNT0 = 0;
+	TCNT2 = 0;
+	PORTD = (1 << PD6) | (1 << PD5) | (1 << PD3);
+	PORTB = 1 << PB3;
+}
+
+void turnLeft(){
+	M1_reverse(15);
+	M2_forward(15);	
+}
+
+void turn_left()
+{
+	OCR0A = 60;
+	OCR2B = 60;
+	TCCR0A = (1 << COM0A1) | (1 << COM0A0) | (1 << WGM01) | (1 << WGM00);
+	TCCR2A = (1 << COM2B1) | (1 << COM2B0) | (1 << WGM21) | (1 << WGM20);
+	PORTD = 1 << PD5;
+	PORTB = 1 << PB3;
+	TCCR0B = 1 << CS01;
+	TCCR2B = 1 << CS21;
+}
+
+void turn_right()
+{
+	OCR0B = 60;
+	OCR2A = 60;
+	TCCR0A = (1 << COM0B1) | (1 << COM0B0) | (1 << WGM01) | (1 << WGM00);
+	TCCR2A = (1 << COM2A1) | (1 << COM2A0) | (1 << WGM21) | (1 << WGM20);
+	PORTD = (1 << PD6) | (1 << PD3);
+	PORTB = 0;
+	TCCR0B = 1 << CS01;
+	TCCR2B = 1 << CS21;
+}
+
+void turnRight(){
+	M2_reverse(15);
+	M1_forward(15);
+}
+void interruptsOFF(){
+	cli();
+}
+
+void LEDsOFF(){
+	DDRC |= (1<<DDC5);
+	PORTC &= ~(1<<PORTC5);  
+}
+
+
+void charge(){
+	DDRC |= (1<<DDC0) | (1<<DDC1) | (1<<DDC2) | (1<<DDC3) | (1<<DDC4); 
+	PORTC |= (1<<PORTC0) | (1<<PORTC1) | (1<<PORTC2) | (1<<PORTC3) | (1<<PORTC4);  
+}
+
+void LEDsON(){
+	DDRC |= (1<<DDC5);
+	PORTC |= (1<<PORTC5);
+}
+
+void startTimer(){
+	OCR1A = timeout;
+	TIMSK1 = (1<<OCIE1A); 
+	TCCR1A = (1<<COM1A0);
+	TCCR1B = (1<< CS11) | (1<<CS10);
+}
+
+void discharge(){
+	DDRC &= ~( (1<<DDC0) | (1<<DDC1) | (1<<DDC2) | (1<<DDC3) | (1<<DDC4) ) ; 
+	
+}
+
+void interruptsON(){
+	PCMSK1 = (1<<PCINT8) | (1<<PCINT9) | (1<<PCINT10) | (1<<PCINT11) | (1<<PCINT12) ; 
+	PCICR = (1<<PCIE1); 
+	PCIFR = (1<<PCIF1); 
+}
+
+void readSensor(){
+	cli(); // mask all interrupts
+	
+	//LEDoff 
+	DDRC = (1<<DDC5)  | (1<<DDC0) | (1<<DDC1) | (1<<DDC2) | (1<<DDC3) | (1<<DDC4);
+	PORTC &= ~( (1<<PORTC5) | (1<<PC4) | (1<<PC3) | (1<<PC2) | (1<<PC1) | (1<<PC0) ) ;
+	
+	// initialize static var for sensor use
+	PrevPinc = (1<<4) | (1<<3) | (1<<2) | (1<<1) | (1<<0);
+	for(uint8_t i =0; i < 5; ++i){
+		pinstate[i] = 1; // if sensor is over light or dark default to dark
+		hasBeenRead[i] = 0; // if the sensor has been read
+		pinChangeTimes[i] = 0; 
+	}
+
+	//initialize ports
+	PORTC = 0x00;
+	TCNT1 = 0;
+	TCCR1A =0;
+	TCCR1B = 0; 
+	TCCR1C = 0;
+	
+	TCCR1A = (1<<COM1A1); 
+	OCR1A = timeout; 
+	TIMSK1 = (1<<OCIE1A); 
+	
+	//charge capacitors 
+	DDRC |= (1<<DDC0) | (1<<DDC1) | (1<<DDC2) | (1<<DDC3) | (1<<DDC4);
+	PORTC |= (1<<PORTC0) | (1<<PORTC1) | (1<<PORTC2) | (1<<PORTC3) | (1<<PORTC4);
+	delay_us(11); 
+	
+	TCCR1B = (1<<CS11);
+	
+	//LEDs on
+	DDRC &= ~((1<<DDC0) | (1<<DDC1) | (1<<DDC2) | (1<<DDC3) | (1<<DDC4));
+	DDRC |= (1<<DDC5);
+	PORTC |= (1<<PORTC5);
+	
+	
+	//interrupts on
+	PCMSK1 |= (1<<PCINT8) | (1<<PCINT9) | (1<<PCINT10) | (1<<PCINT11) | (1<<PCINT12) ;
+	PCICR |= (1<<PCIE1);
+	PCIFR = 1 <<PCIF1; 
+	sei(); 
+	
+	//while statement waits unitl all pins have been read.
+	while(1){
+		if(hasBeenRead[0] ==1 && hasBeenRead[1] ==1 && hasBeenRead[2] == 1 && hasBeenRead[3] ==1 && hasBeenRead[4] ==1 ){
+			//Brake();
+			break; 
+		}
+	}
+	
+	TCCR1B = 0; 
+	
+}
+
+void NotPID_control()
+{
+	motor_init();
+	while(1) {
+		readSensor();
+		
+		//Convert pinstate array into pinSate uint8_t for case evaluation
+		uint8_t pinState = 0b00000000;
+		for (uint8_t i = 0; i < 5; ++i) {
+			if (pinstate[i]) {
+				pinState |= 1 << i;
+			}
+		}	
+	
+		uint8_t index;
+		// determine which PWM prescaler to put into the motors
+		switch (pinState) {
+			case 0b00001:
+				index = 0;
+				break;
+			case 0b00011:
+				index = 1;
+				break;
+			case 0b00010:
+				index = 2;
+				break;
+			case 0b00110:
+				index = 3;
+				break;
+			case 0b00100:
+				index = 4;
+				break;
+			case 0b01100:
+				index = 5;
+				break;
+			case 0b01000:
+				index = 6;
+				break;
+			case 0b11000:
+				index = 7;
+				break;
+			case 0b10000:
+				index = 8;
+				break;
+			default:
+				index = 4;
+				break;
+		}
+		
+
+		// set appropriate PWM compare registers
+		OCR0B = leftMotorSpeed[index];
+		OCR2B = rightMotorSpeed[index];
+
+		// if a left turn or a right turn or a dead end is detected, stop following the line. 
+		if (pinState & 0b10000 || pinState & 0b1 || pinState == 0) {
+			for (uint8_t i = 0; i < 10; ++i) {
+				readSensors();
+			}
+			if(pinState & 0b10000 || pinState & 0b1 || pinState == 0){
+				brake();
+				break;	
+			}
+			
+		}
+	}
+}
+void inch(uint8_t* turnDirections)
+{
+	uint8_t direction = 0;
+	// set the duty cycle to 60 for both SL and SR
+	M1_forward(60);
+	M2_forward(60); 
+	// delay however long it takes to inch, needs to be adjusted in lab for tuning
+	for (uint8_t i = 0; i < FIRST_DELAY; ++i) {
+		readSensors();
+
+		//Convert pinstate array into pinSate uint8_t for case evaluation
+		uint8_t pinState = 0b00000000;
+		for (uint8_t i = 0; i < 5; ++i) {
+			if (pinstate[i]) {
+				pinState |= 1 << i;
+			}
+		
+		}
+		if (pinState & 0b1) 
+			//direction = 0;
+			direction |= 1 << 0;
+		if (pinState & 0b10000 || pinState == 0b011100)
+			//direction = 0;
+			direction |= 1 << 2;
+		_delay_ms(10);
+	}
+	brake();
+
+	readSensor();
+	if (pinState & 0b100 || pinState & 0b110 || pinState & 0b1100 || pinState & 0b1000 || pinState & 0b10 )
+		//direction = 0;
+		direction |= 1 << 1;
+	/*	
+	if(pinState & 0b0){
+		direction = 0;
+		direction |= (1 << 0) | (1 << 1) | (1 << 2) ; 
+	}
+	*/
+	*turnDirections = direction;
+}
+
+void SECOND_inch()
+{
+	// set the duty cycle to 60 for both SL and SR
+	M1_forward(60);
+	M2_forward(60); 
+	// delay however long it takes to inch, needs to be adjusted in lab for tuning
+	for (uint8_t i = 0; i < SECOND_DELAY; ++i) {
+		_delay_ms(10);
+	}
+	brake();
+}
+
+void remove_redundancies(char* pathArray, uint8_t* pathsize)
+{
+	uint8_t size = *pathsize;
+	// no simplifications needed if there are less than 3 paths, or if the second to last turn was not a reverse
+	if (size < 3 || pathArray[size - 2] != 'B') 
+		return;
+
+	// angle coordinates are assuming clockwise orientation, with going forward being 0 degrees
+	int8_t turn_eval = 0;
+	for (uint8_t i = size - 3; i < size; ++i) {
+		if (pathArray[i] == 'L') {
+			turn_eval -= 1;
+		} else if (pathArray[i] == 'B') {
+			turn_eval += 2;
+		} else if (pathArray[i] == 'R') {
+			turn_eval += 1;
+		}
+	}
+
+	switch (turn_eval) {
+		// theoretically, only should consider going straight or turning right or going straight never turning left
+		case 0:
+			pathArray[size - 3] = 'S';
+			break;
+		case 1:
+			pathArray[size - 3] = 'R';
+			break;
+		case 2:
+			pathArray[size - 3] = 'B';
+			break;
+	}
+	// two valid turns have been eliminated from the array
+	*pathsize -= 2;
+}
+
+void turnRobot(char direction)
+{
+	switch (direction) {
+		// perform a left turn
+		case 'L':
+			turn_left();
+			break;
+		// no need to turn if going straight
+		case 'S':
+			return;
+		// perform a right turn
+		case 'R':
+			turn_right();
+			break;
+		// reverse 180 degrees
+		case 'B':
+			turn_backwards();
+			break;
+	}
+	for (uint16_t i = 0; i < DELAY_TURN; ++i)
+		_delay_ms(10);
+
+	while (1) {
+		readSensors();
+	
+		//Convert pinstate array into pinSate uint8_t for case evaluation
+		uint8_t pinState = 0b00000000;
+		for (uint8_t i = 0; i < 5; ++i) {
+			if (pinstate[i]) {
+				pinState |= 1 << i;
+			}
+		
+		}
+
+
+		if (pinState == 0b100) {
+			brake();
+			break;
+		}
+	}
+}
+
+void turn(uint8_t right_direction, char* pathArray, uint8_t* pathsize)
+{
+	uint8_t size = *pathsize;
+	if (right_direction & 0b1) {
+		// configure timer to turn left
+		turnRobot('L');
+		pathArray[size] = 'L';
+	} else if (right_direction & 0b10) {
+		// going straight, so no turning needed
+		turnRobot('S');
+		pathArray[size] = 'S';
+	} else if (right_direction & 0b100) {
+		// configure timer to turn right
+		turnRobot('R');
+		pathArray[size] = 'R';
+	} else {
+		// turning 180, doesn't matter in which right_directionion 
+		turnRobot('B');
+		pathArray[size] = 'B';
+	}
+	++*pathsize;
+}
+
+int main(void)
+{
+	brake();
+	// delay at beginning
+	for (uint8_t i = 0; i < 255; ++i) 
+		_delay_ms(10);
+
+	char pathArray[200] = {};
+	uint8_t pathsize = 0;
+
+	while (1) {
+		// 1st bit is left, 2nd bit is straight, 3rd bit is right
+		uint8_t right_direction = 0;
+		NotPID_control
+		if (pinState & 0b1)
+			right_direction |= 1 << 0;
+		if (pinState & 0b10000)
+			right_direction |= 1 << 2;
+		inch(&right_direction);
+		// if all five sensors are sensing dark, the maze has been solved
+		// or if the robot is off the track, immediately brake the motors and get out of this loop
+		if (pinState == 0b11111) {
+			brake();
+			break;
+		}
+		turn(right_direction, pathArray, &pathsize);
+		remove_redundancies(pathArray, &pathsize);
+	}
+	brake();
+	// implement a simple delay before the second run
+	for (uint8_t i = 0; i < 255; ++i)
+		for (uint8_t i = 0; i < 2; ++i)
+			_delay_ms(10);
+
+	for (uint8_t i = 0; i < pathsize; ++i) {
+		NotPID_control
+		_delay_us(10);
+		SECOND_DELAY();
+		_delay_us(10);
+		turnRobot(pathArray[i]);
+		// delay to simulate the delay associated with the redundant loop elimination
+		_delay_ms(5);
+	}
+	NotPID_control();
+	brake();
+
+	while (1);
+}
